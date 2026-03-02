@@ -1,0 +1,6 @@
+pyTelegramBotAPI==4.21.0
+Flask==3.0.0
+SQLAlchemy==2.0.25
+requests==2.31.0
+psutil==5.9.7
+psycopg2-binary==2.9.9
