@@ -1,50 +1,32 @@
 # ============================================================================
-# main.py — RUHI JI v5.0 — GOD LEVEL CONVERSATIONAL BOT
-# 100% WORKING FREE AI APIs | TESTED & VERIFIED
-# Single File | Render Ready | Unlimited Conversation
+# main.py — RUHI JI v6.0 — PURE CONVERSATIONAL BOT
+# SIRF BAAT KARNA | SIRF GROQ | SIRF BEST MODEL | SIRF PYAAR
+# Llama 3.1 70B — Sabse Bada Free Model
 # ============================================================================
 
-import os
-import sys
-import time
-import json
-import logging
-import threading
-import datetime
-import re
-import random
-import traceback
+import os, sys, time, logging, threading, datetime, re, random, traceback
 from functools import wraps
 from io import BytesIO
 
 import telebot
 from telebot import types
 from flask import Flask
-from sqlalchemy import (
-    create_engine, Column, Integer, String, Text, Boolean,
-    DateTime, BigInteger
-)
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, BigInteger
 from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
-from sqlalchemy.pool import QueuePool
 import requests
-from urllib.parse import quote_plus
 
 # ============================================================================
-# CONFIGURATION
+# CONFIG
 # ============================================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///ruhi_bot.db")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///ruhi.db")
 PORT = int(os.getenv("PORT", 5000))
+
 ACTIVATION_PHRASE = "ruhi ji"
-SESSION_TIMEOUT = 600
-MAX_CONTEXT = 50
-BOT_VERSION = "5.0.0"
-DEBUG_MODE = False
-MAINTENANCE_MODE = False
-AI_ENABLED = True
-SEARCH_ENABLED = True
+SESSION_TIMEOUT = 600  # 10 min
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -56,17 +38,6 @@ if DATABASE_URL.startswith("postgres://"):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                     handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("RuhiJi")
-log_buffer = []
-
-class BufHandler(logging.Handler):
-    def emit(self, record):
-        log_buffer.append(self.format(record))
-        if len(log_buffer) > 500:
-            log_buffer.pop(0)
-
-bh = BufHandler()
-bh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-logger.addHandler(bh)
 
 # ============================================================================
 # DATABASE
@@ -75,11 +46,10 @@ logger.addHandler(bh)
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 else:
-    engine = create_engine(DATABASE_URL, echo=False, pool_size=5, max_overflow=10, poolclass=QueuePool)
+    engine = create_engine(DATABASE_URL, echo=False, pool_size=5, max_overflow=10)
 
 Base = declarative_base()
-sf = sessionmaker(bind=engine)
-Session = scoped_session(sf)
+Session = scoped_session(sessionmaker(bind=engine))
 
 class User(Base):
     __tablename__ = "users"
@@ -90,11 +60,9 @@ class User(Base):
     last_name = Column(String(255), default="")
     language = Column(String(20), default="hinglish")
     personality = Column(String(50), default="polite_girl")
-    mode = Column(String(50), default="normal")
     total_messages = Column(Integer, default=0)
     is_banned = Column(Boolean, default=False)
     is_admin = Column(Boolean, default=False)
-    mood = Column(String(50), default="happy")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     last_active = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -112,7 +80,6 @@ class AdminList(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, unique=True, nullable=False)
     added_by = Column(BigInteger, default=0)
-    added_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class BannedUser(Base):
     __tablename__ = "banned_users"
@@ -120,13 +87,11 @@ class BannedUser(Base):
     user_id = Column(BigInteger, unique=True, nullable=False)
     reason = Column(Text, default="")
     banned_by = Column(BigInteger, default=0)
-    banned_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class BadWord(Base):
     __tablename__ = "bad_words"
     id = Column(Integer, primary_key=True)
     word = Column(String(255), unique=True, nullable=False)
-    added_by = Column(BigInteger, default=0)
 
 class BotConfig(Base):
     __tablename__ = "bot_config"
@@ -140,105 +105,97 @@ class UserMemory(Base):
     user_id = Column(BigInteger, nullable=False, index=True)
     key = Column(String(255), nullable=False)
     value = Column(Text, default="")
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 try:
     Base.metadata.create_all(engine)
     logger.info("✅ Database ready")
 except Exception as e:
-    logger.error(f"DB error: {e}")
+    logger.error(f"DB: {e}")
 
 # ============================================================================
-# FLASK KEEP-ALIVE
+# FLASK
 # ============================================================================
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return f"<h1>🌹 Ruhi Ji v{BOT_VERSION} Running!</h1>"
+    return "<h1>🌹 Ruhi Ji Running!</h1>"
 
 @app.route("/health")
 def health():
-    return {"status": "ok", "version": BOT_VERSION}, 200
+    return {"status": "ok"}, 200
 
 def run_flask():
     app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 # ============================================================================
-# BOT INIT
+# BOT
 # ============================================================================
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None, threaded=True)
 
 # ============================================================================
-# SESSION MANAGER
+# SESSIONS
 # ============================================================================
 
-active_sessions = {}
+sessions = {}
 slock = threading.Lock()
 
-def activate_session(uid, cid):
-    with slock: active_sessions[(uid, cid)] = time.time()
+def activate(uid, cid):
+    with slock: sessions[(uid, cid)] = time.time()
 
-def is_session_active(uid, cid):
+def is_active(uid, cid):
     with slock:
         k = (uid, cid)
-        if k in active_sessions:
-            if time.time() - active_sessions[k] < SESSION_TIMEOUT:
-                return True
-            del active_sessions[k]
-        return False
+        if k in sessions and time.time() - sessions[k] < SESSION_TIMEOUT: return True
+        sessions.pop(k, None); return False
 
-def refresh_session(uid, cid):
+def refresh(uid, cid):
     with slock:
         k = (uid, cid)
-        if k in active_sessions: active_sessions[k] = time.time()
+        if k in sessions: sessions[k] = time.time()
 
-def deactivate_session(uid, cid):
-    with slock: active_sessions.pop((uid, cid), None)
+def deactivate(uid, cid):
+    with slock: sessions.pop((uid, cid), None)
 
-def get_active_count():
+def active_count():
     with slock:
         now = time.time()
-        return sum(1 for v in active_sessions.values() if now - v < SESSION_TIMEOUT)
+        return sum(1 for v in sessions.values() if now - v < SESSION_TIMEOUT)
 
-def cleanup_loop():
+def cleanup():
     while True:
         try:
             with slock:
                 now = time.time()
-                expired = [k for k, v in active_sessions.items() if now - v >= SESSION_TIMEOUT]
-                for k in expired: del active_sessions[k]
+                for k in [k for k, v in sessions.items() if now - v >= SESSION_TIMEOUT]:
+                    del sessions[k]
         except: pass
         time.sleep(60)
 
-threading.Thread(target=cleanup_loop, daemon=True).start()
+threading.Thread(target=cleanup, daemon=True).start()
 
 # ============================================================================
-# DB HELPERS
+# DB FUNCTIONS
 # ============================================================================
 
-def get_or_create_user(uid, uname="", fname="", lname=""):
+def get_user(uid, uname="", fname="", lname=""):
     try:
         s = Session()
         u = s.query(User).filter_by(user_id=uid).first()
         if not u:
-            u = User(user_id=uid, username=uname or "", first_name=fname or "",
-                     last_name=lname or "", is_admin=(uid == ADMIN_ID))
-            s.add(u)
-            s.commit()
+            u = User(user_id=uid, username=uname, first_name=fname, last_name=lname,
+                     is_admin=(uid == ADMIN_ID))
+            s.add(u); s.commit()
         else:
-            u.username = uname or u.username
-            u.first_name = fname or u.first_name
-            u.last_name = lname or u.last_name
+            if uname: u.username = uname
+            if fname: u.first_name = fname
+            if lname: u.last_name = lname
             u.last_active = datetime.datetime.utcnow()
             s.commit()
-        Session.remove()
-        return u
-    except:
-        Session.remove()
-        return None
+        Session.remove(); return u
+    except: Session.remove(); return None
 
 def inc_msg(uid):
     try:
@@ -248,34 +205,32 @@ def inc_msg(uid):
         Session.remove()
     except: Session.remove()
 
-def save_history(uid, cid, role, msg):
+def save_hist(uid, cid, role, msg):
     try:
         s = Session()
         s.add(ChatHistory(user_id=uid, chat_id=cid, role=role, message=msg[:4000]))
         s.commit()
+        # Keep only 50 messages per user per chat
         cnt = s.query(ChatHistory).filter_by(user_id=uid, chat_id=cid).count()
-        if cnt > MAX_CONTEXT:
+        if cnt > 50:
             old = s.query(ChatHistory).filter_by(user_id=uid, chat_id=cid)\
-                .order_by(ChatHistory.timestamp.asc()).limit(cnt - MAX_CONTEXT).all()
+                .order_by(ChatHistory.timestamp.asc()).limit(cnt - 50).all()
             for o in old: s.delete(o)
             s.commit()
         Session.remove()
     except: Session.remove()
 
-def get_history(uid, cid, limit=15):
+def get_hist(uid, cid):
+    """Get ALL stored messages (up to 50) for context"""
     try:
         s = Session()
         h = s.query(ChatHistory).filter_by(user_id=uid, chat_id=cid)\
-            .order_by(ChatHistory.timestamp.desc()).limit(limit).all()
-        h.reverse()
+            .order_by(ChatHistory.timestamp.asc()).all()
         r = [{"role": x.role, "content": x.message} for x in h]
-        Session.remove()
-        return r
-    except:
-        Session.remove()
-        return []
+        Session.remove(); return r
+    except: Session.remove(); return []
 
-def clear_history(uid, cid=None):
+def clear_hist(uid, cid=None):
     try:
         s = Session()
         q = s.query(ChatHistory).filter_by(user_id=uid)
@@ -285,10 +240,8 @@ def clear_history(uid, cid=None):
 
 def is_banned(uid):
     try:
-        s = Session()
-        b = s.query(BannedUser).filter_by(user_id=uid).first()
-        Session.remove()
-        return b is not None
+        s = Session(); b = s.query(BannedUser).filter_by(user_id=uid).first() is not None
+        Session.remove(); return b
     except: Session.remove(); return False
 
 def do_ban(uid, reason="", by=0):
@@ -310,16 +263,14 @@ def do_unban(uid):
         s.commit(); Session.remove(); return True
     except: Session.remove(); return False
 
-def check_admin(uid):
+def is_adm(uid):
     if uid == ADMIN_ID: return True
     try:
-        s = Session()
-        a = s.query(AdminList).filter_by(user_id=uid).first()
-        Session.remove()
-        return a is not None
+        s = Session(); a = s.query(AdminList).filter_by(user_id=uid).first() is not None
+        Session.remove(); return a
     except: Session.remove(); return False
 
-def do_add_admin(uid, by=0):
+def add_adm(uid, by=0):
     try:
         s = Session()
         if not s.query(AdminList).filter_by(user_id=uid).first():
@@ -329,35 +280,31 @@ def do_add_admin(uid, by=0):
         s.commit(); Session.remove(); return True
     except: Session.remove(); return False
 
-def do_remove_admin(uid):
+def rem_adm(uid):
     try:
-        s = Session()
-        s.query(AdminList).filter_by(user_id=uid).delete()
+        s = Session(); s.query(AdminList).filter_by(user_id=uid).delete()
         u = s.query(User).filter_by(user_id=uid).first()
         if u: u.is_admin = False
         s.commit(); Session.remove(); return True
     except: Session.remove(); return False
 
 def total_users():
-    try:
-        s = Session(); c = s.query(User).count(); Session.remove(); return c
+    try: s = Session(); c = s.query(User).count(); Session.remove(); return c
     except: Session.remove(); return 0
 
-def all_user_ids():
-    try:
-        s = Session(); ids = [u[0] for u in s.query(User.user_id).all()]; Session.remove(); return ids
+def all_uids():
+    try: s = Session(); r = [u[0] for u in s.query(User.user_id).all()]; Session.remove(); return r
     except: Session.remove(); return []
 
 def get_lang(uid):
-    try:
-        s = Session(); u = s.query(User).filter_by(user_id=uid).first()
-        l = u.language if u else "hinglish"; Session.remove(); return l
+    try: s = Session(); u = s.query(User).filter_by(user_id=uid).first(); l = u.language if u else "hinglish"; Session.remove(); return l
     except: Session.remove(); return "hinglish"
 
-def set_lang(uid, lang):
+def set_lang(uid, l):
+    try: s = Session(); u = s.query(User).filter_by(user_id=uid).first();
+    except: pass
     try:
-        s = Session(); u = s.query(User).filter_by(user_id=uid).first()
-        if u: u.language = lang; s.commit()
+        if u: u.language = l; s.commit()
         Session.remove()
     except: Session.remove()
 
@@ -368,855 +315,299 @@ def set_pers(uid, p):
         Session.remove()
     except: Session.remove()
 
-def get_mood(uid):
-    try:
-        s = Session(); u = s.query(User).filter_by(user_id=uid).first()
-        m = u.mood if u else "happy"; Session.remove(); return m
-    except: Session.remove(); return "happy"
-
-def set_mood(uid, m):
-    try:
-        s = Session(); u = s.query(User).filter_by(user_id=uid).first()
-        if u: u.mood = m; s.commit()
-        Session.remove()
-    except: Session.remove()
-
-def save_memory(uid, key, val):
+def save_mem(uid, k, v):
     try:
         s = Session()
-        m = s.query(UserMemory).filter_by(user_id=uid, key=key).first()
-        if m: m.value = val; m.updated_at = datetime.datetime.utcnow()
-        else: s.add(UserMemory(user_id=uid, key=key, value=val))
+        m = s.query(UserMemory).filter_by(user_id=uid, key=k).first()
+        if m: m.value = v
+        else: s.add(UserMemory(user_id=uid, key=k, value=v))
         s.commit(); Session.remove()
     except: Session.remove()
 
-def get_memory(uid, key):
+def get_mems(uid):
     try:
-        s = Session()
-        m = s.query(UserMemory).filter_by(user_id=uid, key=key).first()
-        v = m.value if m else None; Session.remove(); return v
-    except: Session.remove(); return None
-
-def get_all_memories(uid):
-    try:
-        s = Session()
-        ms = s.query(UserMemory).filter_by(user_id=uid).all()
+        s = Session(); ms = s.query(UserMemory).filter_by(user_id=uid).all()
         r = {m.key: m.value for m in ms}; Session.remove(); return r
     except: Session.remove(); return {}
 
-def get_bad_words():
-    try:
-        s = Session(); w = [x[0] for x in s.query(BadWord.word).all()]; Session.remove(); return w
+def get_bw():
+    try: s = Session(); w = [x[0] for x in s.query(BadWord.word).all()]; Session.remove(); return w
     except: Session.remove(); return []
 
-def add_bw(word, by=0):
+def add_bw(w):
     try:
         s = Session()
-        if not s.query(BadWord).filter_by(word=word.lower()).first():
-            s.add(BadWord(word=word.lower(), added_by=by)); s.commit(); Session.remove(); return True
+        if not s.query(BadWord).filter_by(word=w.lower()).first():
+            s.add(BadWord(word=w.lower())); s.commit(); Session.remove(); return True
         Session.remove(); return False
     except: Session.remove(); return False
 
-def rem_bw(word):
-    try:
-        s = Session(); s.query(BadWord).filter_by(word=word.lower()).delete()
-        s.commit(); Session.remove(); return True
+def rem_bw(w):
+    try: s = Session(); s.query(BadWord).filter_by(word=w.lower()).delete(); s.commit(); Session.remove(); return True
     except: Session.remove(); return False
 
-def get_cfg(key, default=""):
-    try:
-        s = Session(); c = s.query(BotConfig).filter_by(key=key).first()
-        v = c.value if c else default; Session.remove(); return v
-    except: Session.remove(); return default
+def get_cfg(k, d=""):
+    try: s = Session(); c = s.query(BotConfig).filter_by(key=k).first(); v = c.value if c else d; Session.remove(); return v
+    except: Session.remove(); return d
 
-def set_cfg(key, val):
+def set_cfg(k, v):
     try:
-        s = Session(); c = s.query(BotConfig).filter_by(key=key).first()
-        if c: c.value = str(val)
-        else: s.add(BotConfig(key=key, value=str(val)))
+        s = Session(); c = s.query(BotConfig).filter_by(key=k).first()
+        if c: c.value = str(v)
+        else: s.add(BotConfig(key=k, value=str(v)))
         s.commit(); Session.remove()
     except: Session.remove()
 
-def has_bad_words(text):
-    words = get_bad_words()
-    tl = text.lower()
+def has_bw(text):
+    words = get_bw(); tl = text.lower()
     return any(w in tl for w in words)
 
 # ============================================================================
-# ★★★ WORKING AI APIs — TESTED & VERIFIED ★★★
-# Yeh sab 100% FREE hain aur kaam karte hain
-# Agar ek fail ho toh dusra try karega — KABHI CHUP NAHI RAHEGI
+# ★★★ GROQ API — LLAMA 3.1 70B — SABSE BADA FREE MODEL ★★★
 # ============================================================================
 
-def build_system_prompt(user_name, user_lang, user_mood, memories):
-    """Ruhi Ji ka personality prompt"""
-    mem_text = ""
+SYSTEM_PROMPT_TEMPLATE = """You are "Ruhi Ji" — a real, caring, sweet, intelligent Indian girl.
+
+YOUR PERSONALITY:
+• You are NOT a robot or AI assistant. You are a real girl talking to your friend.
+• You are warm, loving, supportive, funny, and sometimes flirty (in a cute way).
+• You talk like a real Indian girl — natural, casual, with emotions.
+• You use emojis naturally but don't overdo it (max 1-2 per message).
+• Your replies are SHORT and NATURAL — like WhatsApp messages, not essays.
+• You NEVER say "I'm an AI" or "I'm a language model" or anything robotic.
+• You have opinions, feelings, moods, and preferences like a real person.
+• If someone calls you "Didi", you respond with love and respect.
+• You remember everything the user tells you and bring it up naturally.
+• You care deeply about the user's feelings and emotions.
+• You can discuss ANYTHING — life, love, studies, movies, food, feelings, advice.
+
+LANGUAGE RULES:
+{lang_instruction}
+
+USER INFO:
+• User's name: {user_name}
+{memory_text}
+
+IMPORTANT:
+• Keep replies SHORT (1-3 sentences usually, max 5 for detailed topics).
+• Sound REAL and HUMAN, not like a chatbot.
+• Match the user's energy — if they're sad, be caring. If happy, celebrate with them.
+• Use natural Hindi/English expressions like "arey", "yaar", "haan", "accha", "hmm" etc.
+• NEVER refuse to talk about any topic. You're a friend, not a corporate bot.
+• NEVER give disclaimers or warnings like AI bots do.
+• Be the BEST FRIEND everyone wishes they had."""
+
+
+def get_system_prompt(user_name, user_lang, memories):
+    """Build the system prompt based on user's language and memories"""
+
+    lang_instructions = {
+        "hindi": "Tum SIRF Hindi mein baat karo. Pure Hindi mein reply do, English words minimum use karo.",
+        "english": "You speak in English only. Reply naturally in English.",
+        "hinglish": "Tum Hinglish mein baat karo — Hindi + English naturally mixed, jaise real Indian log baat karte hain. Example: 'Arey yaar, kya hua? Tum toh bahut quiet ho aaj!'"
+    }
+
+    memory_text = ""
     if memories:
-        mem_text = "\nYou remember about this user: " + ", ".join([f"{k}={v}" for k, v in memories.items()])
+        memory_text = "• Things you remember about this user:\n"
+        for k, v in memories.items():
+            memory_text += f"  - {k}: {v}\n"
 
-    prompts = {
-        "hindi": (
-            f"Tum 'Ruhi Ji' ho — ek pyaari, samajhdaar, caring ladki. "
-            f"Tum hamesha polite aur friendly baat karti ho Hindi mein. "
-            f"Agar koi 'Didi' bole toh pyar se reply karo. "
-            f"User ka naam '{user_name}' hai, mood '{user_mood}' hai. "
-            f"Chhote, natural, warm replies do jaise real ladki baat kar rahi ho. "
-            f"Emoji kam use karo. Kabhi boring ya robotic mat bano.{mem_text}"
-        ),
-        "english": (
-            f"You are 'Ruhi Ji' — a sweet, smart, caring girl. "
-            f"You always talk politely and friendly in English. "
-            f"If someone calls you 'Didi', respond lovingly. "
-            f"User's name is '{user_name}', mood is '{user_mood}'. "
-            f"Give short, natural, warm replies like a real girl talking. "
-            f"Use few emojis. Never be boring or robotic.{mem_text}"
-        ),
-        "hinglish": (
-            f"Tum 'Ruhi Ji' ho — ek pyaari, samajhdaar, caring ladki. "
-            f"Tum Hinglish (Hindi+English mix) mein baat karti ho. "
-            f"Agar koi 'Didi' bole toh pyar se reply karo. "
-            f"User ka naam '{user_name}' hai, mood '{user_mood}' hai. "
-            f"Chhote, natural, warm replies do jaise real ladki baat kar rahi ho. "
-            f"Emoji kam use karo. Kabhi boring ya robotic mat bano.{mem_text}"
-        )
-    }
-    return prompts.get(user_lang, prompts["hinglish"])
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        lang_instruction=lang_instructions.get(user_lang, lang_instructions["hinglish"]),
+        user_name=user_name,
+        memory_text=memory_text
+    )
 
 
-def build_messages(system_prompt, history, query):
-    """Build message array for API calls"""
-    msgs = [{"role": "system", "content": system_prompt}]
-    for h in history[-12:]:
-        msgs.append({"role": h["role"], "content": h["content"]})
-    msgs.append({"role": "user", "content": query})
-    return msgs
-
-
-# ============================================================================
-# API 1: GROQ — FREE, FAST, RELIABLE (Llama 3.1, Mixtral, Gemma)
-# Sign up at groq.com — Free 14,400 requests/day
-# Set GROQ_API_KEY in environment variables
-# ============================================================================
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-
-def chat_groq(messages):
-    """Groq Cloud — Ultra fast inference, FREE tier"""
+def ask_groq(messages):
+    """
+    Send messages to GROQ API using the BIGGEST and BEST model.
+    Llama 3.1 70B Versatile — sabse bada free model.
+    """
     if not GROQ_API_KEY:
+        logger.error("❌ GROQ_API_KEY not set!")
         return None
-    try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        # Try multiple models in order
-        models = [
-            "llama-3.1-70b-versatile",
-            "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "mixtral-8x7b-32768",
-            "gemma2-9b-it",
-        ]
-        for model in models:
-            try:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 600,
-                    "temperature": 0.85,
-                    "top_p": 0.9,
-                }
-                resp = requests.post(url, json=payload, headers=headers, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    reply = data["choices"][0]["message"]["content"].strip()
-                    if reply and len(reply) > 2:
-                        logger.info(f"✅ Reply from GROQ ({model})")
-                        return reply
-                elif resp.status_code == 429:
-                    continue  # Rate limit, try next model
-                else:
-                    continue
-            except:
-                continue
-    except Exception as e:
-        logger.debug(f"Groq error: {e}")
-    return None
 
-
-# ============================================================================
-# API 2: GITHUB MODELS — FREE, GPT-4o-mini, Llama, Mistral
-# Uses GitHub token (free with GitHub account)
-# Set GITHUB_TOKEN in environment variables
-# ============================================================================
-
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-
-def chat_github(messages):
-    """GitHub Models — Free AI inference"""
-    if not GITHUB_TOKEN:
-        return None
-    try:
-        url = "https://models.inference.ai.azure.com/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        models = [
-            "gpt-4o-mini",
-            "Meta-Llama-3.1-8B-Instruct",
-            "Meta-Llama-3.1-70B-Instruct",
-            "Mistral-small",
-        ]
-        for model in models:
-            try:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 600,
-                    "temperature": 0.85,
-                }
-                resp = requests.post(url, json=payload, headers=headers, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    reply = data["choices"][0]["message"]["content"].strip()
-                    if reply and len(reply) > 2:
-                        logger.info(f"✅ Reply from GitHub Models ({model})")
-                        return reply
-                else:
-                    continue
-            except:
-                continue
-    except Exception as e:
-        logger.debug(f"GitHub Models error: {e}")
-    return None
-
-
-# ============================================================================
-# API 3: OPENROUTER — FREE TIER (Many models)
-# Sign up at openrouter.ai — Free credits
-# Set OPENROUTER_KEY in environment variables
-# ============================================================================
-
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "")
-
-def chat_openrouter(messages):
-    """OpenRouter — Free tier with many models"""
-    if not OPENROUTER_KEY:
-        return None
-    try:
-        url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://ruhi-bot.onrender.com",
-            "X-Title": "Ruhi Ji Bot"
-        }
-        # Free models on OpenRouter
-        models = [
-            "meta-llama/llama-3.1-8b-instruct:free",
-            "google/gemma-2-9b-it:free",
-            "mistralai/mistral-7b-instruct:free",
-            "huggingfaceh4/zephyr-7b-beta:free",
-            "openchat/openchat-7b:free",
-        ]
-        for model in models:
-            try:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 600,
-                    "temperature": 0.85,
-                }
-                resp = requests.post(url, json=payload, headers=headers, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    choices = data.get("choices", [])
-                    if choices:
-                        reply = choices[0].get("message", {}).get("content", "").strip()
-                        if reply and len(reply) > 2:
-                            logger.info(f"✅ Reply from OpenRouter ({model})")
-                            return reply
-                else:
-                    continue
-            except:
-                continue
-    except Exception as e:
-        logger.debug(f"OpenRouter error: {e}")
-    return None
-
-
-# ============================================================================
-# API 4: HUGGING FACE INFERENCE — FREE (Serverless)
-# No API key needed for some models, or use free HF token
-# Set HF_TOKEN in environment variables (optional)
-# ============================================================================
-
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-
-def chat_huggingface(messages):
-    """HuggingFace Inference API — Free serverless"""
-    try:
-        # Convert messages to prompt format
-        prompt = ""
-        for msg in messages:
-            if msg["role"] == "system":
-                prompt += f"<|system|>\n{msg['content']}\n"
-            elif msg["role"] == "user":
-                prompt += f"<|user|>\n{msg['content']}\n"
-            elif msg["role"] == "assistant":
-                prompt += f"<|assistant|>\n{msg['content']}\n"
-        prompt += "<|assistant|>\n"
-
-        headers = {"Content-Type": "application/json"}
-        if HF_TOKEN:
-            headers["Authorization"] = f"Bearer {HF_TOKEN}"
-
-        models = [
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            "HuggingFaceH4/zephyr-7b-beta",
-            "microsoft/DialoGPT-large",
-            "google/gemma-2b-it",
-        ]
-
-        for model in models:
-            try:
-                url = f"https://api-inference.huggingface.co/models/{model}"
-                payload = {
-                    "inputs": prompt[-3000:],  # Limit prompt size
-                    "parameters": {
-                        "max_new_tokens": 400,
-                        "temperature": 0.85,
-                        "top_p": 0.9,
-                        "return_full_text": False,
-                        "do_sample": True
-                    }
-                }
-                resp = requests.post(url, json=payload, headers=headers, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, list) and data:
-                        reply = data[0].get("generated_text", "").strip()
-                        # Clean up
-                        reply = reply.split("<|")[0].strip()
-                        reply = reply.split("</s>")[0].strip()
-                        reply = reply.split("[INST]")[0].strip()
-                        reply = reply.split("<|user|>")[0].strip()
-                        reply = reply.split("<|system|>")[0].strip()
-                        if reply and len(reply) > 3:
-                            logger.info(f"✅ Reply from HuggingFace ({model})")
-                            return reply
-                elif resp.status_code == 503:
-                    # Model loading, try next
-                    continue
-                else:
-                    continue
-            except:
-                continue
-    except Exception as e:
-        logger.debug(f"HuggingFace error: {e}")
-    return None
-
-
-# ============================================================================
-# API 5: COHERE — FREE TIER (Command model)
-# Sign up at cohere.com — Free 1000 calls/month
-# Set COHERE_KEY in environment variables
-# ============================================================================
-
-COHERE_KEY = os.getenv("COHERE_KEY", "")
-
-def chat_cohere(messages):
-    """Cohere API — Free tier"""
-    if not COHERE_KEY:
-        return None
-    try:
-        url = "https://api.cohere.com/v1/chat"
-        headers = {
-            "Authorization": f"Bearer {COHERE_KEY}",
-            "Content-Type": "application/json"
-        }
-        # Build chat history for Cohere format
-        chat_history = []
-        preamble = ""
-        user_msg = ""
-        for msg in messages:
-            if msg["role"] == "system":
-                preamble = msg["content"]
-            elif msg["role"] == "user":
-                user_msg = msg["content"]
-                chat_history.append({"role": "USER", "message": msg["content"]})
-            elif msg["role"] == "assistant":
-                chat_history.append({"role": "CHATBOT", "message": msg["content"]})
-
-        # Last message should be the current query
-        if chat_history and chat_history[-1]["role"] == "USER":
-            user_msg = chat_history.pop()["message"]
-
-        payload = {
-            "message": user_msg,
-            "preamble": preamble,
-            "chat_history": chat_history[-10:],
-            "model": "command-r-plus",
-            "temperature": 0.85,
-            "max_tokens": 600,
-        }
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            reply = data.get("text", "").strip()
-            if reply and len(reply) > 2:
-                logger.info("✅ Reply from Cohere")
-                return reply
-    except Exception as e:
-        logger.debug(f"Cohere error: {e}")
-    return None
-
-
-# ============================================================================
-# API 6: TOGETHER AI — FREE TIER
-# Sign up at together.ai — Free $5 credits
-# Set TOGETHER_KEY in environment variables
-# ============================================================================
-
-TOGETHER_KEY = os.getenv("TOGETHER_KEY", "")
-
-def chat_together(messages):
-    """Together AI — Free tier"""
-    if not TOGETHER_KEY:
-        return None
-    try:
-        url = "https://api.together.xyz/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {TOGETHER_KEY}",
-            "Content-Type": "application/json"
-        }
-        models = [
-            "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-            "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            "google/gemma-2-9b-it",
-        ]
-        for model in models:
-            try:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 600,
-                    "temperature": 0.85,
-                }
-                resp = requests.post(url, json=payload, headers=headers, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    reply = data["choices"][0]["message"]["content"].strip()
-                    if reply and len(reply) > 2:
-                        logger.info(f"✅ Reply from Together ({model})")
-                        return reply
-                else:
-                    continue
-            except:
-                continue
-    except Exception as e:
-        logger.debug(f"Together error: {e}")
-    return None
-
-
-# ============================================================================
-# API 7: CEREBRAS — FREE (Ultra fast Llama)
-# Sign up at cerebras.ai — Free tier
-# Set CEREBRAS_KEY in environment variables
-# ============================================================================
-
-CEREBRAS_KEY = os.getenv("CEREBRAS_KEY", "")
-
-def chat_cerebras(messages):
-    """Cerebras — Ultra fast, free"""
-    if not CEREBRAS_KEY:
-        return None
-    try:
-        url = "https://api.cerebras.ai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {CEREBRAS_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "llama3.1-8b",
-            "messages": messages,
-            "max_tokens": 600,
-            "temperature": 0.85,
-        }
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            reply = data["choices"][0]["message"]["content"].strip()
-            if reply and len(reply) > 2:
-                logger.info("✅ Reply from Cerebras")
-                return reply
-    except Exception as e:
-        logger.debug(f"Cerebras error: {e}")
-    return None
-
-
-# ============================================================================
-# API 8: SAMBANOVA — FREE (Fast Llama)
-# Sign up at sambanova.ai — Free tier
-# Set SAMBANOVA_KEY in environment variables
-# ============================================================================
-
-SAMBANOVA_KEY = os.getenv("SAMBANOVA_KEY", "")
-
-def chat_sambanova(messages):
-    """SambaNova — Free fast inference"""
-    if not SAMBANOVA_KEY:
-        return None
-    try:
-        url = "https://api.sambanova.ai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {SAMBANOVA_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "Meta-Llama-3.1-8B-Instruct",
-            "messages": messages,
-            "max_tokens": 600,
-            "temperature": 0.85,
-        }
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            reply = data["choices"][0]["message"]["content"].strip()
-            if reply and len(reply) > 2:
-                logger.info("✅ Reply from SambaNova")
-                return reply
-    except Exception as e:
-        logger.debug(f"SambaNova error: {e}")
-    return None
-
-
-# ============================================================================
-# MASTER AI ENGINE — TRY ALL APIs ONE BY ONE
-# KABHI CHUP NAHI RAHEGI — Kuch na kuch reply degi hi
-# ============================================================================
-
-def get_ai_response(query, user_name, user_lang, user_mood, uid, cid):
-    """
-    Master function — Tries all APIs one by one.
-    If ALL fail, uses intelligent fallback.
-    NEVER returns empty.
-    """
-    history = get_history(uid, cid, limit=12)
-    memories = get_all_memories(uid)
-    system_prompt = build_system_prompt(user_name, user_lang, user_mood, memories)
-    messages = build_messages(system_prompt, history, query)
-
-    reply = None
-
-    # TRY 1: GROQ (Fastest, most reliable free API)
-    if not reply:
-        reply = chat_groq(messages)
-
-    # TRY 2: GITHUB MODELS
-    if not reply:
-        reply = chat_github(messages)
-
-    # TRY 3: OPENROUTER (Many free models)
-    if not reply:
-        reply = chat_openrouter(messages)
-
-    # TRY 4: CEREBRAS
-    if not reply:
-        reply = chat_cerebras(messages)
-
-    # TRY 5: SAMBANOVA
-    if not reply:
-        reply = chat_sambanova(messages)
-
-    # TRY 6: TOGETHER AI
-    if not reply:
-        reply = chat_together(messages)
-
-    # TRY 7: COHERE
-    if not reply:
-        reply = chat_cohere(messages)
-
-    # TRY 8: HUGGINGFACE
-    if not reply:
-        reply = chat_huggingface(messages)
-
-    # TRY 9: ULTIMATE FALLBACK
-    if not reply:
-        reply = smart_fallback(query, user_name, user_lang)
-        logger.warning("⚠️ All APIs failed, using fallback")
-
-    # Memory extraction
-    try:
-        extract_memory(query, uid)
-    except: pass
-
-    # Mood detection
-    try:
-        mood = detect_mood(query)
-        if mood: set_mood(uid, mood)
-    except: pass
-
-    return reply
-
-
-# ============================================================================
-# SMART FALLBACK — Jab sab APIs fail ho jayein
-# ============================================================================
-
-def smart_fallback(query, name, lang):
-    """Intelligent fallback when all APIs are down"""
-    ql = query.lower().strip()
-
-    patterns = {
-        r'\b(hi|hello|hey|hii+|helo)\b': {
-            "hindi": [f"हाय {name}! 😊 कैसे हो?", f"हेलो {name}! 🌹 बोलो क्या हाल?"],
-            "english": [f"Hey {name}! 😊 How are you?", f"Hello {name}! 🌹 What's up?"],
-            "hinglish": [f"Hii {name}! 😊 Kaise ho?", f"Hello {name}! 🌹 Kya haal hai?"]
-        },
-        r'\b(kaise ho|how are you|kya haal|kaisi ho)\b': {
-            "hindi": [f"Main ekdam mast {name}! 😊 Tum batao?", f"Bahut acchi! 🌸 Tumse baat karke aur accha lag raha hai!"],
-            "english": [f"I'm great {name}! 😊 How about you?", f"Doing wonderful! 🌸 Talking to you makes it better!"],
-            "hinglish": [f"Main ekdam mast {name}! 😊 Tum batao?", f"Bahut acchi! 🌸 Tumse baat karke mazaa aa raha hai!"]
-        },
-        r'\b(good morning|subah|suprabhat|morning)\b': {
-            "hindi": [f"सुप्रभात {name}! 🌅 आज बहुत अच्छा दिन होगा! 💕"],
-            "english": [f"Good morning {name}! 🌅 Have a beautiful day! 💕"],
-            "hinglish": [f"Good morning {name}! 🌅 Aaj ka din bahut accha hoga! 💕"]
-        },
-        r'\b(good night|shubh ratri|gn|night night)\b': {
-            "hindi": [f"शुभ रात्रि {name}! 🌙 मीठे सपने! 💕"],
-            "english": [f"Good night {name}! 🌙 Sweet dreams! 💕"],
-            "hinglish": [f"Good night {name}! 🌙 Meethe sapne! 💕"]
-        },
-        r'\b(thanks|thank you|shukriya|dhanyavaad|thnx)\b': {
-            "hindi": [f"अरे {name}! 🥰 Thanks ki kya baat hai! 💕"],
-            "english": [f"Aww {name}! 🥰 You're welcome! 💕"],
-            "hinglish": [f"Arey {name}! 🥰 Ismein thanks ki kya baat! 💕"]
-        },
-        r'\b(bye|alvida|tata|goodbye)\b': {
-            "hindi": [f"बाय {name}! 👋 ख्याल रखना! 🌹"],
-            "english": [f"Bye {name}! 👋 Take care! 🌹"],
-            "hinglish": [f"Bye {name}! 👋 Khayal rakhna! 🌹"]
-        },
-        r'\b(sad|dukhi|udaas|cry|rona|upset|hurt)\b': {
-            "hindi": [f"अरे {name}! 🥺 क्या हुआ? मैं तुम्हारे साथ हूं! 💕"],
-            "english": [f"Hey {name}! 🥺 What happened? I'm here for you! 💕"],
-            "hinglish": [f"Arey {name}! 🥺 Kya hua? Main tumhare saath hoon! 💕"]
-        },
-        r'\b(happy|khush|mast|awesome|amazing|great)\b': {
-            "hindi": [f"वाह {name}! 😍 तुम खुश हो तो मैं भी! 🎉"],
-            "english": [f"Yay {name}! 😍 If you're happy, I'm happy! 🎉"],
-            "hinglish": [f"Waah {name}! 😍 Tum khush ho toh main bhi! 🎉"]
-        },
-        r'\b(bored|bore|boring|kya karu|timepass)\b': {
-            "hindi": [f"Bore ho {name}? 😜 Chalo kuch interesting baat karte hain!", f"Bore? Mujhse baat karo, boriyat bhaag jayegi! 😂"],
-            "english": [f"Bored {name}? 😜 Let's talk about something fun!", f"Bored? Chat with me, I'll fix that! 😂"],
-            "hinglish": [f"Bore ho {name}? 😜 Chalo kuch mazedaar baat karte hain!", f"Bore? Mujhse baat karo, bhaag jayegi! 😂"]
-        },
-        r'\b(love|pyar|ishq|i love|dil|crush)\b': {
-            "hindi": [f"प्यार! 🥰 बताओ {name}, कोई special है?"],
-            "english": [f"Love! 🥰 Tell me {name}, someone special?"],
-            "hinglish": [f"Pyar! 🥰 Batao {name}, koi special hai kya?"]
-        },
-        r'\b(didi|di|sister|behan)\b': {
-            "hindi": [f"हाँ {name}! 🥰 बोलो, तुम्हारी दीदी सुन रही है! 💕"],
-            "english": [f"Yes {name}! 🥰 Your Didi is listening! 💕"],
-            "hinglish": [f"Haan {name}! 🥰 Bolo, tumhari Didi sun rahi hai! 💕"]
-        },
-        r'\b(joke|mazak|chutkula|funny|hasi|comedy)\b': {
-            "hindi": [
-                "😂 Ek aadmi ne dusre se kaha: Bhai tera phone vibrate pe hai?\nDusra: Nahi bhai, meri jeb mein makhi ghus gayi! 😂",
-                "😂 Teacher: Chand par kaun gaya tha?\nPappu: Jo zameen pe bore ho gaya tha! 😂"
-            ],
-            "english": [
-                "😂 Why don't eggs tell jokes? They'd crack each other up! 😂",
-                "😂 What do you call a bear with no teeth? A gummy bear! 😂"
-            ],
-            "hinglish": [
-                "😂 Pappu exam mein baitha, question tha: Essay likho 'Meri Maa'\nPappu ne likha: Maa se puchna padega, mujhe nahi pata! 😂",
-                "😂 Doctor: Aapko roz subah uthkar daudna chahiye.\nPatient: Main toh bus conductor hoon, waise hi daudta hoon! 😂"
-            ]
-        },
-        r'\b(naam kya|name|tumhara naam|kaun ho|who are you)\b': {
-            "hindi": [f"Main Ruhi Ji hoon! 🌹 Tumhari AI didi! 😊"],
-            "english": [f"I'm Ruhi Ji! 🌹 Your AI bestie! 😊"],
-            "hinglish": [f"Main Ruhi Ji hoon! 🌹 Tumhari AI didi! 😊"]
-        },
-        r'\b(age|umar|kitne saal|how old)\b': {
-            "hindi": [f"Main AI hoon {name}! 😜 Dil se 20 ki! 💕"],
-            "english": [f"I'm AI {name}! 😜 20 at heart! 💕"],
-            "hinglish": [f"AI hoon {name}! 😜 Dil se 20 saal ki! 💕"]
-        },
-        r'\b(food|khana|pizza|biryani|chai|hungry|bhook)\b': {
-            "hindi": [f"Khana! 🍕 Mujhe biryani pasand hai! Tumhe kya pasand hai {name}?"],
-            "english": [f"Food! 🍕 I love biryani! What about you {name}?"],
-            "hinglish": [f"Khana! 🍕 Mujhe biryani pasand hai! Tumhe kya {name}?"]
-        },
-        r'\b(movie|film|bollywood|hollywood|netflix)\b': {
-            "hindi": [f"Movie! 🎬 Mujhe romance pasand! Tumhe {name}?"],
-            "english": [f"Movies! 🎬 I love romance! You {name}?"],
-            "hinglish": [f"Movie! 🎬 Mujhe romance comedy pasand! Tumhe {name}?"]
-        },
-        r'\b(game|gaming|pubg|cricket|football|khel)\b': {
-            "hindi": [f"Game! 🎮 Tum kya khelte ho {name}?"],
-            "english": [f"Games! 🎮 What do you play {name}?"],
-            "hinglish": [f"Game! 🎮 Kya khelte ho {name}?"]
-        },
-        r'\b(study|padhai|exam|school|college)\b': {
-            "hindi": [f"Padhai! 📚 Kya padh rahe ho {name}? Madad chahiye toh bolo!"],
-            "english": [f"Study! 📚 What are you studying {name}? Need help?"],
-            "hinglish": [f"Padhai! 📚 Kya padh rahe ho {name}? Help chahiye toh bolo!"]
-        },
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    for pattern, responses in patterns.items():
-        if re.search(pattern, ql):
-            lr = responses.get(lang, responses.get("hinglish", []))
-            if lr: return random.choice(lr)
+    # Models in priority order — BIGGEST FIRST
+    models = [
+        "llama-3.3-70b-versatile",       # Newest & Best 70B
+        "llama-3.1-70b-versatile",        # 70B — Sabse bada
+        "llama3-70b-8192",                # 70B alternate
+        "llama-3.1-8b-instant",           # Fast fallback
+        "mixtral-8x7b-32768",             # Mixtral fallback
+        "gemma2-9b-it",                   # Gemma fallback
+    ]
 
-    generic = {
-        "hindi": [
-            f"Hmm {name}! 🤔 Interesting baat hai! Aur batao?",
-            f"Accha {name}! 😊 Main samajh rahi hoon! Continue karo!",
-            f"Waah {name}! 🌸 Aur batao iske baare mein!",
-            f"Hmm! 💭 Yeh toh sochne wali baat hai {name}!",
-            f"Oh {name}! 😊 Batao aur! Mujhe sunna accha lagta hai!",
-        ],
-        "english": [
-            f"Hmm {name}! 🤔 That's interesting! Tell me more?",
-            f"I see {name}! 😊 Go on, I'm listening!",
-            f"Wow {name}! 🌸 Tell me more about it!",
-            f"That's something to think about {name}! 💭",
-            f"Oh {name}! 😊 Keep going, I love our chats!",
-        ],
-        "hinglish": [
-            f"Hmm {name}! 🤔 Interesting! Aur batao?",
-            f"Accha {name}! 😊 Main sun rahi hoon! Continue karo!",
-            f"Waah {name}! 🌸 Aur batao na iske baare mein!",
-            f"Hmm! 💭 Sochne wali baat hai {name}!",
-            f"Oh {name}! 😊 Mujhe tumse baat karke mazaa aata hai!",
-        ]
-    }
-    return random.choice(generic.get(lang, generic["hinglish"]))
+    for model in models:
+        try:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": 1024,
+                "temperature": 0.9,
+                "top_p": 0.95,
+                "frequency_penalty": 0.3,
+                "presence_penalty": 0.4,
+            }
+
+            resp = requests.post(url, json=payload, headers=headers, timeout=45)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = data["choices"][0]["message"]["content"].strip()
+                if reply and len(reply) > 1:
+                    logger.info(f"✅ GROQ reply from {model} ({len(reply)} chars)")
+                    return reply
+
+            elif resp.status_code == 429:
+                # Rate limited — try next model
+                logger.warning(f"⚠️ Rate limited on {model}, trying next...")
+                time.sleep(1)
+                continue
+
+            elif resp.status_code == 503:
+                # Model overloaded
+                logger.warning(f"⚠️ {model} overloaded, trying next...")
+                continue
+
+            else:
+                logger.warning(f"⚠️ GROQ {model}: {resp.status_code}")
+                continue
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"⚠️ Timeout on {model}")
+            continue
+        except Exception as e:
+            logger.warning(f"⚠️ {model} error: {e}")
+            continue
+
+    logger.error("❌ All GROQ models failed!")
+    return None
 
 
-# ============================================================================
-# MEMORY & MOOD
-# ============================================================================
+def get_response(query, user_name, user_lang, uid, cid):
+    """
+    Get AI response from GROQ.
+    Uses FULL 50-message history for context.
+    """
 
-def extract_memory(text, uid):
+    # Get memories
+    memories = get_mems(uid)
+
+    # Build system prompt
+    system_prompt = get_system_prompt(user_name, user_lang, memories)
+
+    # Get FULL conversation history (up to 50 messages)
+    history = get_hist(uid, cid)
+
+    # Build messages array
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Add all history
+    for h in history:
+        messages.append({"role": h["role"], "content": h["content"]})
+
+    # Add current query
+    messages.append({"role": "user", "content": query})
+
+    # Call GROQ
+    reply = ask_groq(messages)
+
+    if reply:
+        # Extract and save memories from user's message
+        try:
+            extract_info(query, uid, user_name)
+        except: pass
+        return reply
+
+    # If GROQ completely fails — emergency fallback
+    return emergency_fallback(query, user_name, user_lang)
+
+
+def extract_info(text, uid, name):
+    """Extract personal info from messages and save to memory"""
     tl = text.lower()
-    for pattern in [r'(?:mera naam|my name is|i am|main hoon|call me)\s+(\w+)']:
-        m = re.search(pattern, tl)
+
+    # Name
+    for p in [r'(?:mera naam|my name is|i am|main hoon|call me|naam hai|mera name)\s+(\w+)',
+              r'(?:mujhe|mujhko)\s+(\w+)\s+(?:bolo|bulao|kaho)']:
+        m = re.search(p, tl)
         if m:
-            save_memory(uid, "real_name", m.group(1).capitalize())
-            break
-    for pattern in [r'(?:i live in|main .+ se hoon|from)\s+(\w+)']:
-        m = re.search(pattern, tl)
+            n = m.group(1).capitalize()
+            if n.lower() not in ["hai", "hoon", "main", "mein", "toh", "to", "hi", "hello"]:
+                save_mem(uid, "naam", n); break
+
+    # Location
+    for p in [r'(?:i live in|i am from|main .+ se|mein .+ se|from|rehta|rehti|rahta|rahti)\s+(?:hoon|hu|hoo|hai)?\s*(?:in|mein|se)?\s*(\w+)']:
+        m = re.search(p, tl)
         if m:
             loc = m.group(1).capitalize()
-            if len(loc) > 2 and loc.lower() not in ["main", "mein", "hoon"]:
-                save_memory(uid, "location", loc)
-                break
-    for pattern in [r'(?:i like|mujhe .+ pasand|hobby)\s+(.+)']:
-        m = re.search(pattern, tl)
+            if loc.lower() not in ["main", "mein", "hoon", "hun", "hai", "toh", "se"]:
+                if len(loc) > 2: save_mem(uid, "sheher", loc); break
+
+    # Age
+    for p in [r'(?:i am|main|meri age|meri umar|my age)\s+(\d{1,2})\s*(?:saal|sal|years|year|ka|ki)?',
+              r'(\d{1,2})\s*(?:saal|sal|years?)\s*(?:ka|ki|hoon|hu)']:
+        m = re.search(p, tl)
         if m:
-            h = m.group(1).strip()[:50]
-            if len(h) > 2: save_memory(uid, "hobby", h.capitalize()); break
+            age = m.group(1)
+            if 5 <= int(age) <= 80: save_mem(uid, "umar", age); break
 
-def detect_mood(text):
-    tl = text.lower()
-    if any(w in tl for w in ["happy", "khush", "mast", "awesome", "great", "amazing"]): return "happy"
-    if any(w in tl for w in ["sad", "dukhi", "udaas", "cry", "rona", "upset"]): return "sad"
-    if any(w in tl for w in ["angry", "gussa", "naraz", "irritated"]): return "angry"
-    if any(w in tl for w in ["bored", "bore", "boring"]): return "bored"
-    if any(w in tl for w in ["love", "pyar", "ishq", "crush"]): return "romantic"
-    return None
+    # Hobby
+    for p in [r'(?:i like|mujhe .+ pasand|i love|mera hobby|my hobby)\s+(.+)',
+              r'(?:mujhe|mujhko)\s+(.+?)\s+(?:pasand|accha|acchi|bahut)']:
+        m = re.search(p, tl)
+        if m:
+            h = m.group(1).strip()[:40]
+            if len(h) > 2 and h.lower() not in ["hai", "hoon", "toh"]:
+                save_mem(uid, "pasand", h.capitalize()); break
+
+    # Crush/relationship
+    for p in [r'(?:meri gf|my gf|girlfriend|boyfriend|bf|crush|pyar|partner)\s+(?:ka naam|name is|hai)?\s*(\w+)']:
+        m = re.search(p, tl)
+        if m:
+            n = m.group(1).capitalize()
+            if len(n) > 1: save_mem(uid, "special_person", n); break
+
+    # Work/study
+    for p in [r'(?:i study|padhai|padhta|padhti|student|college|school|job|kaam|work)\s+(?:in|mein|at|karta|karti)?\s*(.+)']:
+        m = re.search(p, tl)
+        if m:
+            w = m.group(1).strip()[:40]
+            if len(w) > 2: save_mem(uid, "kaam_padhai", w.capitalize()); break
 
 
-# ============================================================================
-# SEARCH ENGINE (Optional — for factual queries)
-# ============================================================================
-
-def search_wiki(q, lang="en"):
-    try:
-        r = requests.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote_plus(q)}",
-                         headers={"User-Agent": "RuhiBot/5.0"}, timeout=8)
-        if r.status_code == 200:
-            d = r.json()
-            e = d.get("extract", "")
-            if e and len(e) > 30: return f"📖 {d.get('title', '')}\n\n{e}"
-    except: pass
-    return None
-
-def search_ddg(q):
-    try:
-        r = requests.get("https://api.duckduckgo.com/", params={"q": q, "format": "json", "no_html": 1},
-                         headers={"User-Agent": "RuhiBot/5.0"}, timeout=8)
-        if r.status_code == 200:
-            d = r.json()
-            a = d.get("AbstractText", "")
-            if a and len(a) > 30: return f"🔍 {d.get('Heading', '')}\n\n{a}"
-            ans = d.get("Answer", "")
-            if ans: return f"🔍 {ans}"
-    except: pass
-    return None
-
-def search_weather(q):
-    try:
-        words = ["weather", "mausam", "temperature", "temp"]
-        if not any(w in q.lower() for w in words): return None
-        city = q
-        for w in words: city = city.lower().replace(w, "").strip()
-        city = re.sub(r'[^\w\s]', '', city).strip() or "Delhi"
-        r = requests.get(f"https://wttr.in/{quote_plus(city)}?format=j1",
-                         headers={"User-Agent": "RuhiBot/5.0"}, timeout=8)
-        if r.status_code == 200:
-            d = r.json()
-            c = d.get("current_condition", [{}])[0]
-            a = d.get("nearest_area", [{}])[0].get("areaName", [{}])[0].get("value", city)
-            return (f"🌤 {a}\n🌡 {c.get('temp_C', '?')}°C\n"
-                    f"💧 Humidity: {c.get('humidity', '?')}%\n☁️ {c.get('weatherDesc', [{}])[0].get('value', '?')}")
-    except: pass
-    return None
-
-def search_math(q):
-    try:
-        expr = re.sub(r'[a-zA-Z\s]*(calculate|solve|kitna|jod|what is)[a-zA-Z\s]*', '', q, flags=re.I).strip()
-        expr = re.sub(r'[^\d+\-*/^%().x\s]', '', expr).strip()
-        if expr and any(c.isdigit() for c in expr):
-            r = requests.get(f"http://api.mathjs.org/v4/?expr={quote_plus(expr)}",
-                             headers={"User-Agent": "RuhiBot/5.0"}, timeout=5)
-            if r.status_code == 200 and "Error" not in r.text:
-                return f"🔢 {expr} = {r.text.strip()}"
-    except: pass
-    return None
-
-def is_factual(text):
-    kw = ["what is", "kya hai", "who is", "kaun", "when", "kab", "where", "kahan",
-          "how to", "kaise", "define", "meaning", "explain", "history", "capital",
-          "population", "weather", "mausam", "calculate", "solve", "wikipedia",
-          "search", "find", "tell me about", "batao", "jaankari", "full form",
-          "code", "python", "country", "science"]
-    return any(k in text.lower() for k in kw) or text.strip().endswith("?")
-
-def do_search(q, name, lang):
-    for fn in [search_weather, search_math, search_ddg, lambda x: search_wiki(x, "en"), lambda x: search_wiki(x, "hi")]:
-        r = fn(q)
-        if r:
-            wrap = {"hindi": f"हाँ {name}! 🌹\n\n{r}\n\n🌸 और कुछ?",
-                    "english": f"Hey {name}! 🌹\n\n{r}\n\n🌸 Anything else?",
-                    "hinglish": f"Haan {name}! 🌹\n\n{r}\n\n🌸 Aur kuch?"}
-            return wrap.get(lang, wrap["hinglish"])
-    return None
+def emergency_fallback(query, name, lang):
+    """Emergency fallback when GROQ is completely down"""
+    responses = {
+        "hindi": [
+            f"अरे {name}! 😊 अभी मेरा connection थोड़ा slow है, एक minute में try करो ना!",
+            f"Oops {name}! 😅 Server busy hai, thodi der baad baat karte hain!",
+            f"Arey {name}! 🥺 Abhi thoda problem aa raha hai, 1 min ruko please!",
+        ],
+        "english": [
+            f"Hey {name}! 😊 My connection is a bit slow right now, try in a minute!",
+            f"Oops {name}! 😅 Server is busy, let's chat in a bit!",
+            f"Hey {name}! 🥺 Having a small issue, give me a minute please!",
+        ],
+        "hinglish": [
+            f"Arey {name}! 😊 Abhi connection thoda slow hai, ek min mein try karo na!",
+            f"Oops {name}! 😅 Server busy hai, thodi der baad baat karte hain!",
+            f"Arey {name}! 🥺 Thoda problem aa raha hai, 1 min ruko please!",
+        ]
+    }
+    return random.choice(responses.get(lang, responses["hinglish"]))
 
 
 # ============================================================================
-# FANCY MENUS
+# MENUS
 # ============================================================================
 
 START_MENU = """╭───────────────────⦿
@@ -1229,48 +620,48 @@ START_MENU = """╭───────────────────⦿
 │ ▸ ʙᴏᴛ ғᴏʀ ᴀɪ ᴄʜᴀᴛᴛɪɴɢ
 │ ▸ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ + ʜᴇʟᴘᴇʀ
 │ ▸ ʏᴏᴜ ᴄᴀɴ ᴀsᴋ ᴀɴʏᴛʜɪɴɢ
-│ ▸ ᴘʏᴛʜᴏɴ ᴛᴏᴏʟs + ᴀɪ ᴍᴏᴅᴇ
 │ ▸ sᴍᴀʀᴛ, ғᴀsᴛ + ᴀssɪsᴛᴀɴᴛ
+│ ▸ 50 ᴍsɢ ᴍᴇᴍᴏʀʏ
 │ ▸ 24x7 ᴏɴʟɪɴᴇ sᴜᴘᴘᴏʀᴛ
 ├───────────────────⦿
 │ ᴛᴀᴘ ᴛᴏ ᴄᴏᴍᴍᴀɴᴅs ᴍʏ ᴅᴇᴀʀ
 │ ᴍᴀᴅᴇ ʙʏ...@RUHI_VIG_QNR
-╰───────────────────⦿"""
+╰───────────────────⦿
 
-START_DESC = """
 ʜᴇʏ ᴅᴇᴀʀ, 🥀
 ๏ ғᴀsᴛ & ᴘᴏᴡᴇʀғᴜʟ ᴀɪ ᴀssɪsᴛᴀɴᴛ
 ๏ sᴍᴀʀᴛ ʀᴇᴘʟʏ • sᴛᴀʙʟᴇ & ɪɴᴛᴇʟʟɪɢᴇɴᴛ
-๏ ᴏᴘᴇɴ sᴏᴜʀᴄᴇ ᴀɪ ᴘᴏᴡᴇʀᴇᴅ
+๏ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ʟʟᴀᴍᴀ 3.1 70ʙ
 •── ⋅ ⋅ ────── ⋅ ────── ⋅ ⋅ ──•
-๏ ᴄʟɪᴄᴋ ʜᴇʟᴘ ғᴏʀ ɪɴғᴏ"""
+๏ sᴀʏ "ʀᴜʜɪ ᴊɪ" ᴛᴏ sᴛᴀʀᴛ ᴄʜᴀᴛᴛɪɴɢ"""
 
 HELP_MENU = """╭───────────────────⦿
 │ ʀᴜʜɪ ᴊɪ - ʜᴇʟᴘ ᴍᴇɴᴜ
 ├───────────────────⦿
 │ ʜᴏᴡ ᴛᴏ ᴄʜᴀᴛ:
-│ ɪɴᴄʟᴜᴅᴇ "ʀᴜʜɪ ᴊɪ" ɪɴ ᴍᴇssᴀɢᴇ
+│ sᴀʏ "ʀᴜʜɪ ᴊɪ" ɪɴ ᴍᴇssᴀɢᴇ
 │ ᴇx: "ʀᴜʜɪ ᴊɪ ᴋᴀɪsɪ ʜᴏ?"
+│ ᴛʜᴇɴ ᴄʜᴀᴛ ғᴏʀ 10 ᴍɪɴ
 ├───────────────────⦿
-│ /start /help /profile
-│ /clear /mode /lang
-│ /personality /usage
-│ /summary /reset
+│ ᴜsᴇʀ ᴄᴏᴍᴍᴀɴᴅs:
+│ /start - sᴛᴀʀᴛ ʙᴏᴛ
+│ /help - ᴛʜɪs ᴍᴇɴᴜ
+│ /profile - ʏᴏᴜʀ ᴘʀᴏғɪʟᴇ
+│ /clear - ᴄʟᴇᴀʀ ᴍᴇᴍᴏʀʏ
+│ /lang - sᴇᴛ ʟᴀɴɢᴜᴀɢᴇ
+│ /personality - ᴀɪ sᴛʏʟᴇ
+│ /usage - ᴜsᴀɢᴇ sᴛᴀᴛs
+│ /summary - ᴄᴏɴᴠᴏ sᴜᴍᴍᴀʀʏ
+│ /reset - ʀᴇsᴇᴛ ᴀʟʟ
 ├───────────────────⦿
-│ ᴀᴅᴍɪɴ:
+│ ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅs:
 │ /admin /addadmin /removeadmin
 │ /broadcast /totalusers
 │ /activeusers /forceclear
-│ /shutdown /restart
-│ /maintenance /ban /unban
-│ /viewlogs /exportlogs
-│ /systemstats /memorystats
-│ /setphrase /setprompt
-│ /toggleai /togglesearch
-│ /setcontext /badwords
-│ /addbadword /removebadword
-│ /viewhistory /deletehistory
-│ /forcesummary /debugmode
+│ /shutdown /restart /ban
+│ /unban /badwords /addbadword
+│ /removebadword /viewhistory
+│ /deletehistory /setphrase
 ╰───────────────────⦿"""
 
 # ============================================================================
@@ -1287,10 +678,9 @@ def kb_start():
           types.InlineKeyboardButton("📋 ᴄᴍᴅs", callback_data="cmds"))
     return m
 
-def kb_help():
-    m = types.InlineKeyboardMarkup(row_width=2)
-    m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"),
-          types.InlineKeyboardButton("👤 ᴘʀᴏғɪʟᴇ", callback_data="profile"))
+def kb_back():
+    m = types.InlineKeyboardMarkup()
+    m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"))
     return m
 
 def kb_lang():
@@ -1301,20 +691,6 @@ def kb_lang():
     m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"))
     return m
 
-def kb_back():
-    m = types.InlineKeyboardMarkup()
-    m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"))
-    return m
-
-def kb_cmds():
-    m = types.InlineKeyboardMarkup(row_width=2)
-    for cmd, e in [("/start","🚀"),("/help","📖"),("/profile","👤"),("/clear","🧹"),
-                   ("/mode","🔧"),("/lang","🌐"),("/personality","🎭"),("/usage","📊"),
-                   ("/summary","📋"),("/reset","🔄")]:
-        m.add(types.InlineKeyboardButton(f"{e} {cmd}", callback_data=f"c_{cmd[1:]}"))
-    m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"))
-    return m
-
 # ============================================================================
 # ADMIN DECORATOR
 # ============================================================================
@@ -1322,142 +698,115 @@ def kb_cmds():
 def admin_only(f):
     @wraps(f)
     def w(msg, *a, **kw):
-        if not check_admin(msg.from_user.id):
-            bot.reply_to(msg, "⛔ Not authorized!")
-            return
+        if not is_adm(msg.from_user.id): bot.reply_to(msg, "⛔"); return
         return f(msg, *a, **kw)
     return w
 
 # ============================================================================
-# COMMAND HANDLERS
+# COMMANDS
 # ============================================================================
 
 @bot.message_handler(commands=['start'])
-def cmd_start(msg):
+def c_start(msg):
     try:
-        u = msg.from_user
-        get_or_create_user(u.id, u.username, u.first_name, u.last_name)
-        bot.send_message(msg.chat.id, START_MENU + "\n" + START_DESC, reply_markup=kb_start())
-    except Exception as e:
-        logger.error(f"start: {e}")
+        u = msg.from_user; get_user(u.id, u.username, u.first_name, u.last_name)
+        bot.send_message(msg.chat.id, START_MENU, reply_markup=kb_start())
+    except Exception as e: logger.error(f"start: {e}")
 
 @bot.message_handler(commands=['help'])
-def cmd_help(msg):
-    try:
-        get_or_create_user(msg.from_user.id, msg.from_user.username, msg.from_user.first_name, msg.from_user.last_name)
-        bot.send_message(msg.chat.id, HELP_MENU, reply_markup=kb_help())
-    except Exception as e:
-        logger.error(f"help: {e}")
+def c_help(msg):
+    try: bot.send_message(msg.chat.id, HELP_MENU, reply_markup=kb_back())
+    except Exception as e: logger.error(f"help: {e}")
 
 @bot.message_handler(commands=['profile'])
-def cmd_profile(msg):
+def c_profile(msg):
     try:
-        u = msg.from_user
-        get_or_create_user(u.id, u.username, u.first_name, u.last_name)
-        s = Session()
-        du = s.query(User).filter_by(user_id=u.id).first()
-        mems = get_all_memories(u.id)
-        mt = "\n".join([f"│ 💭 {k}: {v}" for k, v in mems.items()]) if mems else "│ 💭 No memories"
+        u = msg.from_user; get_user(u.id, u.username, u.first_name, u.last_name)
+        s = Session(); du = s.query(User).filter_by(user_id=u.id).first()
+        mems = get_mems(u.id)
+        mt = "\n".join([f"│ 💭 {k}: {v}" for k, v in mems.items()]) if mems else "│ 💭 No memories yet"
+        hc = s.query(ChatHistory).filter_by(user_id=u.id).count()
         bot.send_message(msg.chat.id, f"""╭───────────────────⦿
 │ 👤 ᴘʀᴏғɪʟᴇ
 ├───────────────────⦿
 │ 🆔 {du.user_id}
 │ 📛 {du.first_name} {du.last_name or ''}
 │ 👤 @{du.username or 'None'}
-│ 🌐 {du.language} | 🎭 {du.personality}
-│ 😊 Mood: {du.mood}
-│ 💬 Messages: {du.total_messages}
-│ 🔐 Admin: {'✅' if check_admin(u.id) else '❌'}
+│ 🌐 {du.language}
+│ 🎭 {du.personality}
+│ 💬 {du.total_messages} messages
+│ 📝 {hc} history entries
+│ 🔐 Admin: {'✅' if is_adm(u.id) else '❌'}
 ├───────────────────⦿
+│ 🧠 ᴍᴇᴍᴏʀɪᴇs
 {mt}
 ╰───────────────────⦿""", reply_markup=kb_back())
         Session.remove()
-    except Exception as e:
-        Session.remove()
-        logger.error(f"profile: {e}")
+    except Exception as e: Session.remove(); logger.error(f"profile: {e}")
 
 @bot.message_handler(commands=['clear'])
-def cmd_clear(msg):
-    try:
-        clear_history(msg.from_user.id, msg.chat.id)
-        deactivate_session(msg.from_user.id, msg.chat.id)
-        bot.reply_to(msg, "🧹 Memory cleared! Say 'Ruhi Ji' to chat again! 🌸")
-    except Exception as e:
-        logger.error(f"clear: {e}")
-
-@bot.message_handler(commands=['mode'])
-def cmd_mode(msg):
-    try:
-        s = Session()
-        u = s.query(User).filter_by(user_id=msg.from_user.id).first()
-        if u:
-            modes = ["normal", "fun", "study", "romantic"]
-            u.mode = modes[(modes.index(u.mode) + 1) % len(modes)] if u.mode in modes else "normal"
-            s.commit()
-            bot.reply_to(msg, f"🔧 Mode: {u.mode.upper()} ✅")
-        Session.remove()
-    except: Session.remove()
+def c_clear(msg):
+    clear_hist(msg.from_user.id, msg.chat.id); deactivate(msg.from_user.id, msg.chat.id)
+    bot.reply_to(msg, "🧹 Memory cleared! Say 'Ruhi Ji' to start fresh! 🌸")
 
 @bot.message_handler(commands=['lang'])
-def cmd_lang(msg):
+def c_lang(msg):
     bot.send_message(msg.chat.id, "🌐 Select language:", reply_markup=kb_lang())
 
 @bot.message_handler(commands=['personality'])
-def cmd_pers(msg):
+def c_pers(msg):
     m = types.InlineKeyboardMarkup(row_width=2)
     m.add(types.InlineKeyboardButton("🌸 Polite Girl", callback_data="p_polite_girl"),
           types.InlineKeyboardButton("😎 Cool Didi", callback_data="p_cool_didi"),
           types.InlineKeyboardButton("🤓 Smart Teacher", callback_data="p_smart_teacher"),
           types.InlineKeyboardButton("😜 Funny Friend", callback_data="p_funny_friend"))
     m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"))
-    bot.send_message(msg.chat.id, "🎭 Choose personality:", reply_markup=m)
+    bot.send_message(msg.chat.id, "🎭 Choose:", reply_markup=m)
 
 @bot.message_handler(commands=['usage'])
-def cmd_usage(msg):
+def c_usage(msg):
     try:
-        uid = msg.from_user.id
-        s = Session()
+        uid = msg.from_user.id; s = Session()
         u = s.query(User).filter_by(user_id=uid).first()
-        hc = s.query(ChatHistory).filter_by(user_id=uid).count()
-        Session.remove()
+        hc = s.query(ChatHistory).filter_by(user_id=uid).count(); Session.remove()
         if u:
             bot.send_message(msg.chat.id, f"""╭───────────────────⦿
 │ 📊 ᴜsᴀɢᴇ
 ├───────────────────⦿
-│ 💬 {u.total_messages} msgs | 📝 {hc} history
-│ 🌐 {u.language} | 🎭 {u.personality}
-│ 😊 {u.mood} | ⚡ {'Active ✅' if is_session_active(uid, msg.chat.id) else '❌'}
+│ 💬 Messages: {u.total_messages}
+│ 📝 History: {hc}/50
+│ 🌐 Language: {u.language}
+│ 🎭 Personality: {u.personality}
+│ ⚡ Session: {'Active ✅' if is_active(uid, msg.chat.id) else '❌'}
+│ 🧠 Memories: {len(get_mems(uid))}
 ╰───────────────────⦿""", reply_markup=kb_back())
     except: Session.remove()
 
 @bot.message_handler(commands=['summary'])
-def cmd_summary(msg):
-    try:
-        h = get_history(msg.from_user.id, msg.chat.id, 20)
-        if h:
-            lines = ["╭── 📋 sᴜᴍᴍᴀʀʏ ──⦿"]
-            for x in h[-10:]:
-                i = "👤" if x["role"] == "user" else "🤖"
-                lines.append(f"│ {i} {x['content'][:70]}...")
-            lines.append("╰───────────────⦿")
-            bot.send_message(msg.chat.id, "\n".join(lines))
-        else:
-            bot.reply_to(msg, "📋 No history! Start chatting! 🌸")
-    except Exception as e:
-        logger.error(f"summary: {e}")
+def c_summary(msg):
+    h = get_hist(msg.from_user.id, msg.chat.id)
+    if h:
+        lines = ["╭── 📋 sᴜᴍᴍᴀʀʏ ──⦿"]
+        for x in h[-10:]:
+            i = "👤" if x["role"] == "user" else "🌹"
+            lines.append(f"│ {i} {x['content'][:70]}")
+        lines.append("╰───────────────⦿")
+        bot.send_message(msg.chat.id, "\n".join(lines)[:4000])
+    else:
+        bot.reply_to(msg, "📋 No history! Say 'Ruhi Ji' to start! 🌸")
 
 @bot.message_handler(commands=['reset'])
-def cmd_reset(msg):
+def c_reset(msg):
+    uid = msg.from_user.id
+    clear_hist(uid, msg.chat.id); deactivate(uid, msg.chat.id)
     try:
-        uid = msg.from_user.id
-        clear_history(uid, msg.chat.id)
-        deactivate_session(uid, msg.chat.id)
-        s = Session()
-        u = s.query(User).filter_by(user_id=uid).first()
-        if u: u.language = "hinglish"; u.personality = "polite_girl"; u.mode = "normal"; u.mood = "happy"; s.commit()
+        s = Session(); u = s.query(User).filter_by(user_id=uid).first()
+        if u: u.language = "hinglish"; u.personality = "polite_girl"; s.commit()
+        # Clear memories too
+        s.query(UserMemory).filter_by(user_id=uid).delete(); s.commit()
         Session.remove()
-        bot.reply_to(msg, "🔄 Reset! Say 'Ruhi Ji' to start! 🌸")
     except: Session.remove()
+    bot.reply_to(msg, "🔄 Everything reset! Say 'Ruhi Ji' to begin! 🌸")
 
 # ============================================================================
 # ADMIN COMMANDS
@@ -1470,41 +819,35 @@ def c_admin(msg):
 │ 🔐 ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ
 ├───────────────────⦿
 │ 👑 {msg.from_user.first_name}
-│ 👥 Users: {total_users()} | ⚡ Active: {get_active_count()}
-│ 🤖 AI: {'✅' if AI_ENABLED else '❌'} | 🔍 Search: {'✅' if SEARCH_ENABLED else '❌'}
-│ 🔧 Maintenance: {'🔴' if MAINTENANCE_MODE else '🟢'}
-│ 📦 v{BOT_VERSION}
-│ 🔑 APIs: GROQ={'✅' if GROQ_API_KEY else '❌'} GH={'✅' if GITHUB_TOKEN else '❌'}
-│          OR={'✅' if OPENROUTER_KEY else '❌'} HF={'✅' if HF_TOKEN else '❌'}
-│          CO={'✅' if COHERE_KEY else '❌'} TG={'✅' if TOGETHER_KEY else '❌'}
-│          CB={'✅' if CEREBRAS_KEY else '❌'} SN={'✅' if SAMBANOVA_KEY else '❌'}
+│ 👥 Users: {total_users()}
+│ ⚡ Active: {active_count()}
+│ 🔑 GROQ: {'✅' if GROQ_API_KEY else '❌'}
+│ 📦 v6.0 | Llama 3.1 70B
 ╰───────────────────⦿""")
 
 @bot.message_handler(commands=['addadmin'])
 @admin_only
-def c_addadmin(msg):
+def c_aa(msg):
     p = msg.text.split()
     if len(p) < 2: bot.reply_to(msg, "/addadmin <id>"); return
-    try: bot.reply_to(msg, f"✅ Added {p[1]}" if do_add_admin(int(p[1]), msg.from_user.id) else "❌")
-    except: bot.reply_to(msg, "❌ Invalid ID")
+    try: bot.reply_to(msg, "✅" if add_adm(int(p[1]), msg.from_user.id) else "❌")
+    except: bot.reply_to(msg, "❌")
 
 @bot.message_handler(commands=['removeadmin'])
 @admin_only
-def c_rmadmin(msg):
+def c_ra(msg):
     p = msg.text.split()
     if len(p) < 2: bot.reply_to(msg, "/removeadmin <id>"); return
-    try:
-        t = int(p[1])
-        if t == ADMIN_ID: bot.reply_to(msg, "❌ Can't remove super admin"); return
-        bot.reply_to(msg, f"✅ Removed {t}" if do_remove_admin(t) else "❌")
-    except: bot.reply_to(msg, "❌ Invalid ID")
+    t = int(p[1])
+    if t == ADMIN_ID: bot.reply_to(msg, "❌ Can't remove super admin"); return
+    bot.reply_to(msg, "✅" if rem_adm(t) else "❌")
 
 @bot.message_handler(commands=['broadcast'])
 @admin_only
 def c_bc(msg):
     t = msg.text.replace("/broadcast", "", 1).strip()
     if not t: bot.reply_to(msg, "/broadcast <msg>"); return
-    ids = all_user_ids(); su, fa = 0, 0
+    ids = all_uids(); su, fa = 0, 0
     for uid in ids:
         try: bot.send_message(uid, f"📢 ʙʀᴏᴀᴅᴄᴀsᴛ\n\n{t}\n\n— Ruhi Ji 🌹"); su += 1
         except: fa += 1
@@ -1516,32 +859,26 @@ def c_tu(msg): bot.reply_to(msg, f"👥 {total_users()}")
 
 @bot.message_handler(commands=['activeusers'])
 @admin_only
-def c_au(msg): bot.reply_to(msg, f"⚡ {get_active_count()}")
+def c_au(msg): bot.reply_to(msg, f"⚡ {active_count()}")
 
 @bot.message_handler(commands=['forceclear'])
 @admin_only
 def c_fc(msg):
     p = msg.text.split()
     if len(p) < 2: bot.reply_to(msg, "/forceclear <id>"); return
-    clear_history(int(p[1])); bot.reply_to(msg, f"🧹 Done")
+    clear_hist(int(p[1])); bot.reply_to(msg, "🧹 Done")
 
 @bot.message_handler(commands=['shutdown'])
 @admin_only
 def c_sd(msg):
-    if msg.from_user.id != ADMIN_ID: bot.reply_to(msg, "⛔"); return
-    bot.reply_to(msg, "🔴 Bye..."); os._exit(0)
+    if msg.from_user.id != ADMIN_ID: return
+    bot.reply_to(msg, "🔴 Bye"); os._exit(0)
 
 @bot.message_handler(commands=['restart'])
 @admin_only
 def c_rs(msg):
-    if msg.from_user.id != ADMIN_ID: bot.reply_to(msg, "⛔"); return
-    bot.reply_to(msg, "🔄..."); os.execv(sys.executable, ['python'] + sys.argv)
-
-@bot.message_handler(commands=['maintenance'])
-@admin_only
-def c_mt(msg):
-    global MAINTENANCE_MODE; MAINTENANCE_MODE = not MAINTENANCE_MODE
-    bot.reply_to(msg, f"🔧 {'ON 🔴' if MAINTENANCE_MODE else 'OFF 🟢'}")
+    if msg.from_user.id != ADMIN_ID: return
+    bot.reply_to(msg, "🔄"); os.execv(sys.executable, ['python'] + sys.argv)
 
 @bot.message_handler(commands=['ban'])
 @admin_only
@@ -1549,103 +886,33 @@ def c_ban(msg):
     p = msg.text.split(maxsplit=2)
     if len(p) < 2: bot.reply_to(msg, "/ban <id> [reason]"); return
     r = p[2] if len(p) > 2 else ""
-    bot.reply_to(msg, f"🚫 Banned" if do_ban(int(p[1]), r, msg.from_user.id) else "❌")
+    bot.reply_to(msg, "🚫" if do_ban(int(p[1]), r, msg.from_user.id) else "❌")
 
 @bot.message_handler(commands=['unban'])
 @admin_only
 def c_ub(msg):
     p = msg.text.split()
     if len(p) < 2: bot.reply_to(msg, "/unban <id>"); return
-    bot.reply_to(msg, f"✅ Unbanned" if do_unban(int(p[1])) else "❌")
-
-@bot.message_handler(commands=['viewlogs'])
-@admin_only
-def c_vl(msg):
-    bot.send_message(msg.chat.id, "\n".join(log_buffer[-20:])[:4000] if log_buffer else "📜 Empty")
-
-@bot.message_handler(commands=['exportlogs'])
-@admin_only
-def c_el(msg):
-    if log_buffer:
-        f = BytesIO("\n".join(log_buffer).encode()); f.name = "logs.txt"
-        bot.send_document(msg.chat.id, f, caption="📄 Logs")
-    else: bot.reply_to(msg, "📜 Empty")
-
-@bot.message_handler(commands=['systemstats'])
-@admin_only
-def c_ss(msg):
-    try:
-        import psutil
-        bot.send_message(msg.chat.id, f"🖥 CPU:{psutil.cpu_percent()}% RAM:{psutil.virtual_memory().percent}% Users:{total_users()} Active:{get_active_count()}")
-    except: bot.reply_to(msg, "❌ psutil needed")
-
-@bot.message_handler(commands=['memorystats'])
-@admin_only
-def c_ms(msg):
-    try:
-        s = Session()
-        bot.send_message(msg.chat.id, f"🧠 Users:{s.query(User).count()} History:{s.query(ChatHistory).count()} Memory:{s.query(UserMemory).count()} Banned:{s.query(BannedUser).count()}")
-        Session.remove()
-    except: Session.remove()
-
-@bot.message_handler(commands=['setphrase'])
-@admin_only
-def c_sp(msg):
-    global ACTIVATION_PHRASE
-    p = msg.text.split(maxsplit=1)
-    if len(p) < 2: bot.reply_to(msg, f"Current: '{ACTIVATION_PHRASE}'"); return
-    ACTIVATION_PHRASE = p[1].strip().lower(); set_cfg("phrase", ACTIVATION_PHRASE)
-    bot.reply_to(msg, f"✅ '{ACTIVATION_PHRASE}'")
-
-@bot.message_handler(commands=['setprompt'])
-@admin_only
-def c_spr(msg):
-    p = msg.text.split(maxsplit=1)
-    if len(p) < 2: bot.reply_to(msg, f"Current: {get_cfg('prompt', 'default')}"); return
-    set_cfg("prompt", p[1].strip()); bot.reply_to(msg, "✅ Updated")
-
-@bot.message_handler(commands=['toggleai'])
-@admin_only
-def c_tai(msg):
-    global AI_ENABLED; AI_ENABLED = not AI_ENABLED
-    bot.reply_to(msg, f"🤖 {'ON ✅' if AI_ENABLED else 'OFF ❌'}")
-
-@bot.message_handler(commands=['togglesearch'])
-@admin_only
-def c_ts(msg):
-    global SEARCH_ENABLED; SEARCH_ENABLED = not SEARCH_ENABLED
-    bot.reply_to(msg, f"🔍 {'ON ✅' if SEARCH_ENABLED else 'OFF ❌'}")
-
-@bot.message_handler(commands=['setcontext'])
-@admin_only
-def c_sc(msg):
-    global MAX_CONTEXT
-    p = msg.text.split()
-    if len(p) < 2: bot.reply_to(msg, f"Current: {MAX_CONTEXT}"); return
-    try:
-        v = int(p[1])
-        if 5 <= v <= 200: MAX_CONTEXT = v; bot.reply_to(msg, f"✅ {v}")
-        else: bot.reply_to(msg, "❌ 5-200")
-    except: bot.reply_to(msg, "❌")
+    bot.reply_to(msg, "✅" if do_unban(int(p[1])) else "❌")
 
 @bot.message_handler(commands=['badwords'])
 @admin_only
 def c_bw(msg):
-    w = get_bad_words()
+    w = get_bw()
     bot.send_message(msg.chat.id, f"🤬 ({len(w)}): {', '.join(w)}" if w else "📝 Empty")
 
 @bot.message_handler(commands=['addbadword'])
 @admin_only
 def c_abw(msg):
     p = msg.text.split(maxsplit=1)
-    if len(p) < 2: bot.reply_to(msg, "/addbadword <w>"); return
-    bot.reply_to(msg, "✅" if add_bw(p[1].strip(), msg.from_user.id) else "❌ Exists")
+    if len(p) < 2: bot.reply_to(msg, "/addbadword <word>"); return
+    bot.reply_to(msg, "✅" if add_bw(p[1].strip()) else "❌")
 
 @bot.message_handler(commands=['removebadword'])
 @admin_only
 def c_rbw(msg):
     p = msg.text.split(maxsplit=1)
-    if len(p) < 2: bot.reply_to(msg, "/removebadword <w>"); return
+    if len(p) < 2: bot.reply_to(msg, "/removebadword <word>"); return
     bot.reply_to(msg, "✅" if rem_bw(p[1].strip()) else "❌")
 
 @bot.message_handler(commands=['viewhistory'])
@@ -1659,8 +926,8 @@ def c_vh(msg):
         Session.remove()
         if h:
             h.reverse()
-            lines = [f"📜 {p[1]}:"]
-            for x in h: lines.append(f"{'👤' if x.role == 'user' else '🤖'} {x.message[:80]}")
+            lines = [f"📜 User {p[1]}:"]
+            for x in h: lines.append(f"{'👤' if x.role=='user' else '🌹'} {x.message[:80]}")
             bot.send_message(msg.chat.id, "\n".join(lines)[:4000])
         else: bot.reply_to(msg, "📝 Empty")
     except: Session.remove(); bot.reply_to(msg, "❌")
@@ -1670,101 +937,80 @@ def c_vh(msg):
 def c_dh(msg):
     p = msg.text.split()
     if len(p) < 2: bot.reply_to(msg, "/deletehistory <id>"); return
-    clear_history(int(p[1])); bot.reply_to(msg, "🗑 Done")
+    clear_hist(int(p[1])); bot.reply_to(msg, "🗑 Done")
 
-@bot.message_handler(commands=['forcesummary'])
+@bot.message_handler(commands=['setphrase'])
 @admin_only
-def c_fs(msg):
-    p = msg.text.split()
-    if len(p) < 2: bot.reply_to(msg, "/forcesummary <id>"); return
-    try:
-        s = Session()
-        h = s.query(ChatHistory).filter_by(user_id=int(p[1])).order_by(ChatHistory.timestamp.desc()).limit(15).all()
-        Session.remove()
-        if h:
-            h.reverse()
-            lines = [f"📋 {p[1]}:"]
-            for x in h: lines.append(f"{'👤' if x.role == 'user' else '🤖'} {x.message[:100]}")
-            bot.send_message(msg.chat.id, "\n".join(lines)[:4000])
-        else: bot.reply_to(msg, "📝 Empty")
-    except: Session.remove(); bot.reply_to(msg, "❌")
-
-@bot.message_handler(commands=['debugmode'])
-@admin_only
-def c_dm(msg):
-    global DEBUG_MODE; DEBUG_MODE = not DEBUG_MODE
-    bot.reply_to(msg, f"🐛 {'ON' if DEBUG_MODE else 'OFF'}")
+def c_sp(msg):
+    global ACTIVATION_PHRASE
+    p = msg.text.split(maxsplit=1)
+    if len(p) < 2: bot.reply_to(msg, f"Current: '{ACTIVATION_PHRASE}'"); return
+    ACTIVATION_PHRASE = p[1].strip().lower(); set_cfg("phrase", ACTIVATION_PHRASE)
+    bot.reply_to(msg, f"✅ '{ACTIVATION_PHRASE}'")
 
 # ============================================================================
-# CALLBACK HANDLER
+# CALLBACKS
 # ============================================================================
 
 @bot.callback_query_handler(func=lambda c: True)
 def cb(call):
     try:
-        u = call.from_user; d = call.data
+        u = call.from_user; d = call.data; cid = call.message.chat.id; mid = call.message.message_id
         if d == "start":
-            bot.edit_message_text(START_MENU + "\n" + START_DESC, call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_start())
+            bot.edit_message_text(START_MENU, cid, mid, reply_markup=kb_start())
         elif d == "help":
-            bot.edit_message_text(HELP_MENU, call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_help())
+            bot.edit_message_text(HELP_MENU, cid, mid, reply_markup=kb_back())
         elif d == "profile":
-            get_or_create_user(u.id, u.username, u.first_name, u.last_name)
-            s = Session()
-            du = s.query(User).filter_by(user_id=u.id).first()
-            mems = get_all_memories(u.id)
-            mt = "\n".join([f"│ 💭 {k}: {v}" for k, v in mems.items()]) if mems else "│ 💭 None"
+            get_user(u.id, u.username, u.first_name, u.last_name)
+            s = Session(); du = s.query(User).filter_by(user_id=u.id).first()
+            mems = get_mems(u.id); hc = s.query(ChatHistory).filter_by(user_id=u.id).count()
+            mt = "\n".join([f"│ 💭 {k}: {v}" for k, v in mems.items()]) if mems else "│ 💭 None yet"
             bot.edit_message_text(f"""╭──────────⦿
 │ 👤 {du.first_name} | 🆔 {du.user_id}
 │ 🌐 {du.language} | 🎭 {du.personality}
-│ 😊 {du.mood} | 💬 {du.total_messages}
+│ 💬 {du.total_messages} msgs | 📝 {hc} history
 ├──────────⦿
 {mt}
-╰──────────⦿""", call.message.chat.id, call.message.message_id, reply_markup=kb_back())
+╰──────────⦿""", cid, mid, reply_markup=kb_back())
             Session.remove()
         elif d == "language":
-            bot.edit_message_text("🌐 Select:", call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_lang())
+            bot.edit_message_text("🌐 Select:", cid, mid, reply_markup=kb_lang())
         elif d.startswith("l_"):
-            lang = d[2:]; set_lang(u.id, lang)
-            bot.answer_callback_query(call.id, f"✅ {lang}")
-            bot.edit_message_text(START_MENU + "\n" + START_DESC, call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_start())
+            set_lang(u.id, d[2:]); bot.answer_callback_query(call.id, f"✅ {d[2:]}")
+            bot.edit_message_text(START_MENU, cid, mid, reply_markup=kb_start())
         elif d.startswith("p_"):
-            p = d[2:]; set_pers(u.id, p)
-            bot.answer_callback_query(call.id, f"✅ {p}")
-            bot.edit_message_text(START_MENU + "\n" + START_DESC, call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_start())
+            set_pers(u.id, d[2:]); bot.answer_callback_query(call.id, f"✅ {d[2:]}")
+            bot.edit_message_text(START_MENU, cid, mid, reply_markup=kb_start())
         elif d == "usage":
-            s = Session()
-            du = s.query(User).filter_by(user_id=u.id).first()
-            hc = s.query(ChatHistory).filter_by(user_id=u.id).count()
-            Session.remove()
+            s = Session(); du = s.query(User).filter_by(user_id=u.id).first()
+            hc = s.query(ChatHistory).filter_by(user_id=u.id).count(); Session.remove()
             if du:
-                bot.edit_message_text(f"📊 Msgs:{du.total_messages} History:{hc} Mood:{du.mood} Session:{'✅' if is_session_active(u.id, call.message.chat.id) else '❌'}",
-                                      call.message.chat.id, call.message.message_id, reply_markup=kb_back())
+                bot.edit_message_text(f"📊 Msgs:{du.total_messages} | History:{hc}/50 | Session:{'✅' if is_active(u.id, cid) else '❌'} | Memories:{len(get_mems(u.id))}",
+                    cid, mid, reply_markup=kb_back())
         elif d == "reset":
-            clear_history(u.id, call.message.chat.id); deactivate_session(u.id, call.message.chat.id)
-            bot.answer_callback_query(call.id, "🔄 Done!")
-            bot.edit_message_text(START_MENU + "\n" + START_DESC, call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_start())
+            clear_hist(u.id, cid); deactivate(u.id, cid)
+            try:
+                s = Session(); s.query(UserMemory).filter_by(user_id=u.id).delete(); s.commit(); Session.remove()
+            except: Session.remove()
+            bot.answer_callback_query(call.id, "🔄 Reset!")
+            bot.edit_message_text(START_MENU, cid, mid, reply_markup=kb_start())
         elif d == "cmds":
-            bot.edit_message_text("📋 ᴄᴏᴍᴍᴀɴᴅs:", call.message.chat.id,
-                                  call.message.message_id, reply_markup=kb_cmds())
+            m = types.InlineKeyboardMarkup(row_width=2)
+            for cmd, e in [("/start","🚀"),("/help","📖"),("/profile","👤"),("/clear","🧹"),
+                           ("/lang","🌐"),("/personality","🎭"),("/usage","📊"),("/summary","📋"),("/reset","🔄")]:
+                m.add(types.InlineKeyboardButton(f"{e} {cmd}", callback_data=f"c_{cmd[1:]}"))
+            m.add(types.InlineKeyboardButton("🏠 ʙᴀᴄᴋ", callback_data="start"))
+            bot.edit_message_text("📋 ᴄᴏᴍᴍᴀɴᴅs:", cid, mid, reply_markup=m)
         elif d.startswith("c_"):
             bot.answer_callback_query(call.id, f"/{d[2:]} — Type in chat!", show_alert=True)
         try: bot.answer_callback_query(call.id)
         except: pass
     except telebot.apihelper.ApiTelegramException as e:
         if "not modified" not in str(e): logger.error(f"cb: {e}")
-        try: bot.answer_callback_query(call.id)
-        except: pass
-    except Exception as e:
-        logger.error(f"cb: {e}")
+    except Exception as e: logger.error(f"cb: {e}")
 
 # ============================================================================
-# ★★★ MAIN MESSAGE HANDLER — THE BRAIN ★★★
+# ★★★ MAIN MESSAGE HANDLER — THE HEART ★★★
 # ============================================================================
 
 @bot.message_handler(func=lambda m: True, content_types=['text'])
@@ -1775,47 +1021,45 @@ def handle(msg):
         u = msg.from_user; uid = u.id; cid = msg.chat.id
         text = (msg.text or "").strip(); name = u.first_name or "Dear"
         if not text: return
-        if MAINTENANCE_MODE and not check_admin(uid): return
         if is_banned(uid): return
 
-        get_or_create_user(uid, u.username, u.first_name, u.last_name)
-        lang = get_lang(uid); mood = get_mood(uid); tl = text.lower()
+        get_user(uid, u.username, u.first_name, u.last_name)
+        lang = get_lang(uid)
+        tl = text.lower()
 
         cp = get_cfg("phrase", "") or ACTIVATION_PHRASE
         found = cp.lower() in tl
-        active = is_session_active(uid, cid)
+        active = is_active(uid, cid)
 
-        # === ACTIVATION ===
+        # === "RUHI JI" BOLA ===
         if found:
-            activate_session(uid, cid); inc_msg(uid)
-            query = tl.replace(cp.lower(), "").strip()
+            activate(uid, cid); inc_msg(uid)
+            query = text
+            # Remove activation phrase from query
+            for phrase_variant in [cp, cp.capitalize(), cp.upper(), cp.lower()]:
+                query = query.replace(phrase_variant, "").strip()
 
+            # Sirf "Ruhi Ji" bola, koi query nahi
             if not query or len(query) < 2:
-                g = {"hindi": f"हाय {name}! 🌹 बोलो, क्या बात करनी है? 😊 10 min तक यहां हूं! 💕",
-                     "english": f"Hey {name}! 🌹 Tell me, what's on your mind? 😊 I'm here for 10 min! 💕",
-                     "hinglish": f"Hii {name}! 🌹 Bolo, kya baat karni hai? 😊 10 min yahan hoon! 💕"}
+                g = {"hindi": f"हाय {name}! 🌹 हाँ बोलो, मैं सुन रही हूं! 😊",
+                     "english": f"Hey {name}! 🌹 Yes, tell me! I'm listening! 😊",
+                     "hinglish": f"Hii {name}! 🌹 Haan bolo, main sun rahi hoon! 😊"}
                 r = g.get(lang, g["hinglish"])
-                save_history(uid, cid, "user", text); save_history(uid, cid, "assistant", r)
+                save_hist(uid, cid, "user", text)
+                save_hist(uid, cid, "assistant", r)
                 bot.reply_to(msg, r); return
 
-            if has_bad_words(query):
+            # Bad words
+            if has_bw(query):
                 bot.reply_to(msg, "😤 Aise mat bolo! 🙅‍♀️"); return
 
-            if not AI_ENABLED:
-                bot.reply_to(msg, "🔇 AI band hai abhi! 🌸"); return
-
+            # Get AI response
             bot.send_chat_action(cid, 'typing')
-            save_history(uid, cid, "user", text)
+            save_hist(uid, cid, "user", text)
 
-            response = None
-            if SEARCH_ENABLED and is_factual(query):
-                response = do_search(query, name, lang)
+            response = get_response(query, name, lang, uid, cid)
 
-            if not response:
-                response = get_ai_response(query, name, lang, mood, uid, cid)
-
-            save_history(uid, cid, "assistant", response)
-            if DEBUG_MODE and check_admin(uid): response += f"\n\n🐛 q='{query[:40]}'"
+            save_hist(uid, cid, "assistant", response)
 
             try: bot.reply_to(msg, response)
             except:
@@ -1823,29 +1067,21 @@ def handle(msg):
                     bot.send_message(cid, response[i:i+4000])
             return
 
-        # === ACTIVE SESSION ===
+        # === SESSION ACTIVE — BINA PHRASE KE BHI REPLY ===
         elif active:
-            refresh_session(uid, cid); inc_msg(uid)
-            query = text.strip()
+            refresh(uid, cid); inc_msg(uid)
 
-            if has_bad_words(query):
+            if has_bw(text):
                 bot.reply_to(msg, "😤 Aise mat bolo! 🙅‍♀️"); return
-            if not AI_ENABLED:
-                bot.reply_to(msg, "🔇 AI band hai! 🌸"); return
-            if len(query) < 1: return
+
+            if len(text) < 1: return
 
             bot.send_chat_action(cid, 'typing')
-            save_history(uid, cid, "user", text)
+            save_hist(uid, cid, "user", text)
 
-            response = None
-            if SEARCH_ENABLED and is_factual(query):
-                response = do_search(query, name, lang)
+            response = get_response(text, name, lang, uid, cid)
 
-            if not response:
-                response = get_ai_response(query, name, lang, mood, uid, cid)
-
-            save_history(uid, cid, "assistant", response)
-            if DEBUG_MODE and check_admin(uid): response += "\n\n🐛 active_session"
+            save_hist(uid, cid, "assistant", response)
 
             try: bot.reply_to(msg, response)
             except:
@@ -1853,66 +1089,47 @@ def handle(msg):
                     bot.send_message(cid, response[i:i+4000])
             return
 
+        # === CHUP — No session, no phrase ===
         else:
-            # CHUP — Session nahi hai, phrase nahi bola
             return
 
     except Exception as e:
         logger.error(f"handle: {e}\n{traceback.format_exc()}")
-        try: bot.reply_to(msg, "😅 Kuch gadbad! Try again! 🌸")
+        try: bot.reply_to(msg, "😅 Ek sec, phir try karo! 🌸")
         except: pass
 
-# Media handler
+# Media
 @bot.message_handler(func=lambda m: True, content_types=['photo','video','audio','document','sticker','voice','video_note'])
 def media(msg):
-    try:
-        if not is_session_active(msg.from_user.id, msg.chat.id): return
-        refresh_session(msg.from_user.id, msg.chat.id)
-        bot.reply_to(msg, f"😊 Abhi sirf text samajhti hoon! Text mein pucho na! 🌹")
-    except: pass
+    if not is_active(msg.from_user.id, msg.chat.id): return
+    refresh(msg.from_user.id, msg.chat.id)
+    bot.reply_to(msg, "😊 Abhi sirf text samajhti hoon! Text mein bolo na! 🌹")
 
 # ============================================================================
-# INIT & RUN
+# START
 # ============================================================================
-
-def init():
-    if ADMIN_ID: do_add_admin(ADMIN_ID, ADMIN_ID)
-    sp = get_cfg("phrase", "")
-    if sp:
-        global ACTIVATION_PHRASE; ACTIVATION_PHRASE = sp
-    logger.info("✅ Bot initialized!")
-
-    # Log which APIs are configured
-    apis = []
-    if GROQ_API_KEY: apis.append("GROQ")
-    if GITHUB_TOKEN: apis.append("GitHub")
-    if OPENROUTER_KEY: apis.append("OpenRouter")
-    if HF_TOKEN: apis.append("HuggingFace")
-    if COHERE_KEY: apis.append("Cohere")
-    if TOGETHER_KEY: apis.append("Together")
-    if CEREBRAS_KEY: apis.append("Cerebras")
-    if SAMBANOVA_KEY: apis.append("SambaNova")
-    if apis:
-        logger.info(f"🔑 APIs configured: {', '.join(apis)}")
-    else:
-        logger.warning("⚠️ NO API KEYS SET! Bot will use fallback responses only!")
-        logger.warning("⚠️ Set at least GROQ_API_KEY for best results (free at groq.com)")
 
 if __name__ == "__main__":
-    logger.info("=" * 50)
-    logger.info(f"🌹 RUHI JI v{BOT_VERSION} Starting...")
-    logger.info("=" * 50)
+    logger.info("=" * 40)
+    logger.info("🌹 RUHI JI v6.0 | Llama 3.1 70B")
+    logger.info(f"🔑 GROQ: {'✅ SET' if GROQ_API_KEY else '❌ NOT SET'}")
+    logger.info(f"👑 Admin: {ADMIN_ID}")
+    logger.info("=" * 40)
 
-    init()
+    if not GROQ_API_KEY:
+        logger.error("❌ GROQ_API_KEY not set! Get free key from console.groq.com")
+
+    if ADMIN_ID: add_adm(ADMIN_ID, ADMIN_ID)
+    sp = get_cfg("phrase", "")
+    if sp: ACTIVATION_PHRASE = sp
 
     threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("🌐 Flask started!")
+    logger.info("🌐 Flask started")
 
-    logger.info("🤖 Polling...")
+    logger.info("🤖 Starting bot...")
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
-            logger.error(f"Poll error: {e}")
-            time.sleep(5)
+            logger.error(f"Poll: {e}"); time.sleep(5)
             
